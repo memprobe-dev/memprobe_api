@@ -1,0 +1,61 @@
+"""Tests for size parsing, memprobe.toml budget loading, and config storage."""
+
+import pytest
+
+from memprobe_cli.budgets import parse_size, load_budgets, find_config
+from memprobe_cli import config
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("512KB", 512 * 1024),
+    ("1MB", 1024 * 1024),
+    ("1.5 MB", int(1.5 * 1024 * 1024)),
+    ("98304", 98304),
+    (4096, 4096),
+])
+def test_parse_size(text, expected):
+    assert parse_size(text) == expected
+
+
+def test_parse_size_invalid():
+    with pytest.raises(ValueError):
+        parse_size("not-a-size")
+
+
+def test_load_budgets(tmp_path):
+    (tmp_path / "memprobe.toml").write_text(
+        '[budgets]\nflash = "512KB"\nram = "128KB"\n".text" = "400KB"\n'
+    )
+    b = load_budgets(tmp_path)
+    assert b["flash"] == 512 * 1024
+    assert b["ram"] == 128 * 1024
+    assert b[".text"] == 400 * 1024
+
+
+def test_load_budgets_walks_up(tmp_path):
+    (tmp_path / "memprobe.toml").write_text('[budgets]\nflash = "1MB"\n')
+    sub = tmp_path / "build" / "out"
+    sub.mkdir(parents=True)
+    assert find_config(sub) == tmp_path / "memprobe.toml"
+    assert load_budgets(sub)["flash"] == 1024 * 1024
+
+
+def test_load_budgets_none(tmp_path):
+    assert load_budgets(tmp_path) == {}
+
+
+def test_config_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMPROBE_HOME", str(tmp_path))
+    monkeypatch.delenv("MEMPROBE_API_KEY", raising=False)
+    monkeypatch.delenv("MEMPROBE_SERVER", raising=False)
+    config.set_values(api_key="mp_live_abcdef123456", server="https://example.test/")
+    assert config.get_api_key() == "mp_live_abcdef123456"
+    assert config.get_server() == "https://example.test"  # trailing slash stripped
+    assert "…" in config.masked_key()
+
+
+def test_env_overrides_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMPROBE_HOME", str(tmp_path))
+    config.set_values(api_key="stored_key")
+    monkeypatch.setenv("MEMPROBE_API_KEY", "env_key")
+    assert config.get_api_key() == "env_key"
