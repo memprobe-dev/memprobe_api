@@ -4,7 +4,7 @@ Firmware memory budgets and size-regression checks for CI, from the command line
 
 `memprobe` reads the section and symbol table out of your ELF **locally** and
 sends only that metadata to the [memprobe](https://memprobe.dev) API, which
-returns the analysis. **Your binary never leaves your machine** — only the
+returns the analysis. **Your binary never leaves your machine**: only the
 sizes and symbol names it contains are sent, the same information `readelf` and
 `nm` print.
 
@@ -61,10 +61,10 @@ memprobe check build/firmware.elf
 | | Local (this tool) | memprobe API |
 |---|---|---|
 | Reads your ELF | yes | never sees the binary |
-| Extracts sections/symbols | yes (via pyelftools) | — |
-| Budget / diff / bloat analysis | — | yes |
+| Extracts sections/symbols | yes (via pyelftools) | no |
+| Budget / diff / bloat analysis | no | yes |
 
-This package contains no analysis logic and no proprietary code — it's a thin,
+This package contains no analysis logic and no proprietary code: it's a thin,
 open-source client. The deeper analysis (call graph, dead-code, stack usage,
 source attribution) lives in the web app at <https://memprobe.dev>.
 
