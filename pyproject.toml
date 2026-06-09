@@ -5,7 +5,7 @@ description = "Firmware memory budgets and size-regression checks for CI. Your b
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "memprobe" }]
+authors = [{ name = "memprobe", email = "memprobe@gmail.com" }]
 keywords = ["firmware", "embedded", "elf", "memory", "ci", "size", "budget"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -26,6 +26,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://memprobe.dev"
 Documentation = "https://memprobe.dev/docs"
+Repository = "https://github.com/memprobe-dev/memprobe_api"
+Issues = "https://github.com/memprobe-dev/memprobe_api/issues"
 
 [project.scripts]
 memprobe = "memprobe_cli.cli:cli"
