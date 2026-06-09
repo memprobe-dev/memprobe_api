@@ -38,7 +38,9 @@ pip install memprobe
 | `memprobe check <elf>` | Fail (exit 1) if a budget in `memprobe.toml` is exceeded. The CI gate. |
 | `memprobe diff <old> <new>` | Size change between two builds, with per-symbol deltas. `--format markdown` for PR comments. |
 | `memprobe init` | Scaffold `memprobe.toml` with flash/ram budgets. |
+| `memprobe account` | Show your plan and this month's usage. |
 | `memprobe config set --key <key> [--server <url>]` | Store your API key (in `~/.memprobe/config.json`). |
+| `memprobe config show` | Show the current key (masked) and server. |
 
 `MEMPROBE_API_KEY` and `MEMPROBE_SERVER` environment variables override the
 stored config, which is convenient in CI.

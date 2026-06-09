@@ -1,9 +1,4 @@
-"""memprobe command-line interface.
-
-Thin client: it extracts ELF metadata locally and calls the memprobe API for
-analysis. Commands are designed to drop into CI: ``check`` exits non-zero on a
-budget violation, which fails the build.
-"""
+"""memprobe command-line interface."""
 
 from __future__ import annotations
 
@@ -26,9 +21,7 @@ console = Console(highlight=False)
 err = Console(stderr=True, highlight=False)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _die(message: str) -> "None":
+def _die(message: str) -> None:
     err.print(f"[bold red]Error:[/] {message}")
     sys.exit(1)
 
@@ -41,14 +34,9 @@ def _extract_or_die(path: str) -> dict:
 
 
 def _call(fn, *args, **kwargs):
-    """Run an API call, turning client errors into a clean exit."""
     try:
         return fn(*args, **kwargs)
-    except client.AuthError as exc:
-        _die(str(exc))
-    except client.QuotaError as exc:
-        _die(str(exc))
-    except client.ApiError as exc:
+    except (client.AuthError, client.QuotaError, client.ApiError) as exc:
         _die(str(exc))
 
 
@@ -62,8 +50,11 @@ def _human(n: int) -> str:
     return f"{neg}{n / 1024 / 1024:.2f} MB"
 
 
+def _signed(n: int) -> str:
+    return _human(n) if n < 0 else f"+{_human(n)}"
+
+
 def parse_fail_on(spec: str) -> dict:
-    """Parse ``flash:+2KB,ram:512`` into per-metric growth limits in bytes."""
     limits: dict = {}
     for part in spec.split(","):
         part = part.strip()
@@ -93,7 +84,6 @@ ram   = "128KB"
 # ".bss"  = "96KB"
 """
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
 
 @click.group()
 @click.version_option(__version__, prog_name="memprobe")
@@ -195,8 +185,8 @@ def analyze(file: str, as_json: bool, project: Optional[str], top: int) -> None:
 
 @cli.command()
 @click.argument("file", type=click.Path(exists=False))
-@click.option("--budget-flash", default=None, help="Max flash (e.g. 512KB). Overrides memprobe.toml.")
-@click.option("--budget-ram", default=None, help="Max RAM (e.g. 128KB). Overrides memprobe.toml.")
+@click.option("--budget-flash", default=None, help="Max flash, such as 512KB. Overrides memprobe.toml.")
+@click.option("--budget-ram", default=None, help="Max RAM, such as 128KB. Overrides memprobe.toml.")
 @click.option("--json", "as_json", is_flag=True, help="Output the result as JSON.")
 def check(file: str, budget_flash: Optional[str], budget_ram: Optional[str], as_json: bool) -> None:
     """Fail (exit 1) if a budget is exceeded. The CI gate.
@@ -239,7 +229,7 @@ def check(file: str, budget_flash: Optional[str], budget_ram: Optional[str], as_
 @click.option("--format", "fmt", type=click.Choice(["terminal", "markdown"]), default="terminal",
               help="'markdown' is ready to post as a PR comment.")
 @click.option("--fail-on", "fail_on", default=None,
-              help="Fail if a metric grows beyond a limit, e.g. 'flash:+2KB,ram:512'.")
+              help="Fail if a metric grows beyond a limit, like 'flash:+2KB,ram:512'.")
 @click.option("--top", type=int, default=15, show_default=True, help="How many symbol changes to show.")
 def diff(old_file: str, new_file: str, as_json: bool, fmt: str,
          fail_on: Optional[str], top: int) -> None:
@@ -305,12 +295,6 @@ def init(force: bool) -> None:
     console.print()
     console.print("  Next: set your key with [cyan]memprobe config set --key <key>[/], "
                   "then [cyan]memprobe check <firmware.elf>[/].")
-
-
-# ── small pure formatters ──────────────────────────────────────────────────────
-
-def _signed(n: int) -> str:
-    return _human(n) if n < 0 else f"+{_human(n)}"
 
 
 def _render_diff_markdown(old_name: str, new_name: str, flash_d: int, ram_d: int,

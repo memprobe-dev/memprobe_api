@@ -7,3 +7,6 @@ dist/
 .venv/
 venv/
 .DS_Store
+
+# Local notebook run (contains local account data, do not publish)
+getting_started.local.ipynb

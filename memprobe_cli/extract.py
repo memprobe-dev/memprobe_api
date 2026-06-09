@@ -1,10 +1,4 @@
-"""Extract commodity memory metadata from an ELF with pyelftools.
-
-This is the only place the CLI touches your binary, and it stays on your
-machine. It reads exactly what ``readelf``/``nm`` expose -- the section table,
-symbol table, and program headers -- and nothing else. There is no analysis
-here; the resulting metadata dict is what gets sent to the memprobe API.
-"""
+"""Read section, symbol, and segment metadata from an ELF with pyelftools."""
 
 from __future__ import annotations
 
@@ -14,7 +8,6 @@ from typing import Union
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
-# The wire schema version. Bump when the shape changes so the server can adapt.
 SCHEMA = "memprobe-lite/1"
 
 _SHF_WRITE = 0x1
@@ -27,10 +20,6 @@ class ExtractError(Exception):
 
 
 def extract(path: Union[str, Path]) -> dict:
-    """Return a JSON-serialisable metadata dict for the ELF at ``path``.
-
-    Raises :class:`ExtractError` if the file is missing or not an ELF.
-    """
     path = Path(path)
     if not path.exists():
         raise ExtractError(f"File not found: {path}")
@@ -39,7 +28,7 @@ def extract(path: Union[str, Path]) -> dict:
             return _extract_open(fh, path.name)
     except ExtractError:
         raise
-    except Exception as exc:  # pyelftools raises a variety of types
+    except Exception as exc:
         raise ExtractError(
             f"Could not read {path.name} as an ELF file: {exc}. "
             f"memprobe analyzes ELF binaries (.elf/.axf)."
@@ -95,7 +84,7 @@ def _extract_open(fh, filename: str) -> dict:
             if sym["st_size"] <= 0:
                 continue
             shndx = sym["st_shndx"]
-            if not isinstance(shndx, int):  # SHN_UNDEF / SHN_ABS etc.
+            if not isinstance(shndx, int):
                 continue
             info = sym["st_info"]
             symbols.append({

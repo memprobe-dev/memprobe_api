@@ -1,9 +1,4 @@
-"""Persistent CLI config: API key and server URL.
-
-Stored in ``$MEMPROBE_HOME/config.json`` (default ``~/.memprobe/config.json``).
-Environment variables ``MEMPROBE_API_KEY`` and ``MEMPROBE_SERVER`` take
-precedence, which is the convenient path in CI.
-"""
+"""Persistent CLI config: API key and server URL."""
 
 from __future__ import annotations
 
@@ -37,7 +32,7 @@ def save(cfg: dict) -> Path:
     p = _path()
     p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     try:
-        os.chmod(p, 0o600)  # the file holds a secret; best-effort lockdown
+        os.chmod(p, 0o600)
     except OSError:
         pass
     return p
@@ -61,7 +56,6 @@ def get_server() -> str:
 
 
 def masked_key() -> str:
-    """The configured key, masked for display (e.g. ``mp_live_…a1b2``)."""
     key = get_api_key()
     if not key:
         return "(not set)"
