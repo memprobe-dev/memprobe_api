@@ -1,7 +1,6 @@
-"""Read section, symbol, and segment metadata from an ELF with pyelftools."""
-
 from __future__ import annotations
 
+import bisect
 from pathlib import Path
 from typing import Union
 
@@ -16,7 +15,83 @@ _SHF_EXEC = 0x4
 
 
 class ExtractError(Exception):
-    """Raised when a file cannot be read as an ELF."""
+    pass
+
+
+class _SourceResolver:
+    """Address -> compile unit name, via .debug_aranges when present,
+    otherwise the low_pc/high_pc range of each CU's top DIE."""
+
+    def __init__(self, elf: ELFFile):
+        self._dwarf = None
+        self._aranges = None
+        self._ranges: list[tuple] = []
+        self._names: dict[int, str] = {}
+        try:
+            if not elf.has_dwarf_info():
+                return
+            dwarf = elf.get_dwarf_info()
+            self._dwarf = dwarf
+            self._aranges = dwarf.get_aranges()
+            if self._aranges is None:
+                self._build_ranges(dwarf)
+        except Exception:
+            self._dwarf = None
+            self._aranges = None
+
+    def _build_ranges(self, dwarf) -> None:
+        for cu in dwarf.iter_CUs():
+            try:
+                attrs = cu.get_top_DIE().attributes
+                low = attrs.get("DW_AT_low_pc")
+                high = attrs.get("DW_AT_high_pc")
+                if low is None or high is None:
+                    continue
+                start = low.value
+                # DW_AT_high_pc is an offset from low_pc in DWARF 4+,
+                # an absolute address in older forms.
+                end = high.value if high.form == "DW_FORM_addr" else start + high.value
+                if end > start:
+                    self._ranges.append((start, end, cu.cu_offset))
+            except Exception:
+                continue
+        self._ranges.sort()
+
+    def lookup(self, addr: int) -> Union[str, None]:
+        if self._dwarf is None or addr == 0:
+            return None
+        try:
+            offset = self._cu_offset(addr)
+            if offset is None and addr & 1:
+                # Thumb function addresses carry bit 0 set.
+                offset = self._cu_offset(addr & ~1)
+            if offset is None:
+                return None
+            if offset not in self._names:
+                self._names[offset] = self._cu_name(offset)
+            return self._names[offset] or None
+        except Exception:
+            return None
+
+    def _cu_offset(self, addr: int):
+        if self._aranges is not None:
+            return self._aranges.cu_offset_at_addr(addr)
+        i = bisect.bisect_right(self._ranges, (addr, float("inf"), 0)) - 1
+        if i >= 0:
+            start, end, offset = self._ranges[i]
+            if start <= addr < end:
+                return offset
+        return None
+
+    def _cu_name(self, offset: int) -> str:
+        cu = self._dwarf.get_CU_at(offset)
+        name = cu.get_top_DIE().attributes.get("DW_AT_name")
+        if name is None:
+            return ""
+        value = name.value
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        return value.replace("\\", "/")
 
 
 def extract(path: Union[str, Path]) -> dict:
@@ -33,6 +108,21 @@ def extract(path: Union[str, Path]) -> dict:
             f"Could not read {path.name} as an ELF file: {exc}. "
             f"memprobe analyzes ELF binaries (.elf/.axf)."
         ) from exc
+
+
+def _unify_file_names(symbols: list) -> None:
+    # STT_FILE gives bare basenames, DWARF gives full paths. When a basename
+    # matches exactly one known path, use the path so the file isn't counted twice.
+    full_paths: dict[str, Union[str, None]] = {}
+    for s in symbols:
+        f = s.get("file")
+        if f and "/" in f:
+            base = f.rsplit("/", 1)[1]
+            full_paths[base] = None if full_paths.get(base, f) != f else f
+    for s in symbols:
+        f = s.get("file")
+        if f and "/" not in f and full_paths.get(f):
+            s["file"] = full_paths[f]
 
 
 def _extract_open(fh, filename: str) -> dict:
@@ -80,21 +170,37 @@ def _extract_open(fh, filename: str) -> dict:
     symbols = []
     symtab = elf.get_section_by_name(".symtab")
     if isinstance(symtab, SymbolTableSection):
+        resolver = _SourceResolver(elf)
+        # an STT_FILE entry names the object file for the locals that follow
+        # it; globals sit after all locals, so the marker only covers locals
+        current_file = None
         for sym in symtab.iter_symbols():
+            info = sym["st_info"]
+            kind = str(info["type"])
+            if kind == "STT_FILE":
+                current_file = sym.name or None
+                continue
             if sym["st_size"] <= 0:
                 continue
             shndx = sym["st_shndx"]
             if not isinstance(shndx, int):
                 continue
-            info = sym["st_info"]
-            symbols.append({
+            bind = str(info["bind"])
+            source = resolver.lookup(sym["st_value"])
+            if source is None and bind == "STB_LOCAL":
+                source = current_file
+            entry = {
                 "name": sym.name,
                 "size": sym["st_size"],
                 "addr": sym["st_value"],
                 "section": idx_to_name.get(shndx, ""),
-                "bind": str(info["bind"]).replace("STB_", ""),
-                "kind": str(info["type"]).replace("STT_", ""),
-            })
+                "bind": bind.replace("STB_", ""),
+                "kind": kind.replace("STT_", ""),
+            }
+            if source:
+                entry["file"] = source
+            symbols.append(entry)
+        _unify_file_names(symbols)
 
     return {
         "schema": SCHEMA,

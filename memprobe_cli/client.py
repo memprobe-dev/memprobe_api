@@ -1,5 +1,3 @@
-"""HTTP client for the memprobe Lite API."""
-
 from __future__ import annotations
 
 from typing import Optional
@@ -10,15 +8,15 @@ from . import __version__, config
 
 
 class ApiError(Exception):
-    """Any failure talking to the API."""
+    pass
 
 
 class AuthError(ApiError):
-    """Missing or rejected API key."""
+    pass
 
 
 class QuotaError(ApiError):
-    """Rate limit or account quota exceeded."""
+    pass
 
 
 _TIMEOUT = 60
@@ -51,7 +49,7 @@ def _request(method: str, endpoint: str, payload: Optional[dict] = None) -> dict
     try:
         return resp.json()
     except ValueError as exc:
-        raise ApiError("The server returned an unexpected (non-JSON) response.") from exc
+        raise ApiError("Unexpected non-JSON response from the server.") from exc
 
 
 def _message(resp) -> str:
@@ -72,6 +70,10 @@ def check(metadata: dict, budgets: dict) -> dict:
 
 def diff(base: dict, head: dict, fail_on: Optional[dict] = None) -> dict:
     return _request("post", "/api/diff", {"base": base, "head": head, "fail_on": fail_on or {}})
+
+
+def diff_project(head: dict, project: str, fail_on: Optional[dict] = None) -> dict:
+    return _request("post", "/api/diff", {"head": head, "project": project, "fail_on": fail_on or {}})
 
 
 def account() -> dict:

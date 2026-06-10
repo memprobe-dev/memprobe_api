@@ -106,6 +106,28 @@ def test_diff_markdown(monkeypatch):
     assert "`foo`" in r.output
 
 
+def test_diff_project_baseline(monkeypatch):
+    seen = {}
+
+    def fake_diff_project(head, project, fail_on=None):
+        seen["project"] = project
+        return {"flash_delta": 256, "ram_delta": 0, "symbol_diffs": [],
+                "passed": True, "regressions": [],
+                "base_build_id": 12, "base_filename": "firmware-v1.elf"}
+
+    monkeypatch.setattr(cli_mod.client, "diff_project", fake_diff_project)
+    r = _run("diff", str(ELF), "--project", "demo", "--format", "markdown")
+    assert r.exit_code == 0, r.output
+    assert seen["project"] == "demo"
+    assert "firmware-v1.elf" in r.output
+
+
+def test_diff_one_file_without_project_errors():
+    r = _run("diff", str(ELF))
+    assert r.exit_code == 1
+    assert "--project" in r.output
+
+
 def test_diff_fail_on(monkeypatch):
     monkeypatch.setattr(cli_mod.client, "diff",
                         lambda base, head, fail_on=None: {

@@ -1,5 +1,3 @@
-"""memprobe command-line interface."""
-
 from __future__ import annotations
 
 import json
@@ -14,7 +12,7 @@ from rich.table import Table
 from rich import box
 
 from . import __version__, client, config
-from .budgets import load_budgets, parse_size
+from .budgets import load_budgets, load_regions, parse_size
 from .extract import extract, ExtractError
 
 console = Console(highlight=False)
@@ -54,6 +52,19 @@ def _signed(n: int) -> str:
     return _human(n) if n < 0 else f"+{_human(n)}"
 
 
+def _short_path(path: str, parts: int = 3) -> str:
+    pieces = path.replace("\\", "/").split("/")
+    return "/".join(pieces[-parts:]) if len(pieces) > parts else path
+
+
+def _usage(used: int, capacity: Optional[int]) -> str:
+    if not capacity:
+        return f"[bold]{_human(used)}[/]"
+    pct = used / capacity * 100
+    color = "red" if pct >= 90 else "yellow" if pct >= 75 else "green"
+    return f"[bold]{_human(used)}[/] / {_human(capacity)} [{color}]({pct:.1f}%)[/]"
+
+
 def parse_fail_on(spec: str) -> dict:
     limits: dict = {}
     for part in spec.split(","):
@@ -71,9 +82,8 @@ def parse_fail_on(spec: str) -> dict:
 
 
 _MEMPROBE_TOML = """\
-# memprobe.toml: firmware memory budgets.
-# `memprobe check <firmware.elf>` exits non-zero when a budget is exceeded, so
-# it can gate a CI build.
+# memprobe.toml
+# `memprobe check <firmware.elf>` exits non-zero when a budget is exceeded.
 
 [budgets]
 flash = "512KB"
@@ -82,6 +92,11 @@ ram   = "128KB"
 # Per-section budgets (optional):
 # ".text" = "400KB"
 # ".bss"  = "96KB"
+
+# Physical part capacity. Adds utilization percentages to analyze and check.
+# [regions]
+# flash = "1MB"
+# ram   = "320KB"
 """
 
 
@@ -159,10 +174,11 @@ def analyze(file: str, as_json: bool, project: Optional[str], top: int) -> None:
         click.echo(json.dumps(result, indent=2))
         return
 
+    regions = load_regions(Path(file).resolve().parent)
     console.rule(f"[bold]memprobe: {result.get('filename', Path(file).name)}[/]")
     console.print()
-    console.print(f"  Flash  [bold]{_human(result.get('total_flash', 0))}[/]")
-    console.print(f"  RAM    [bold]{_human(result.get('total_ram', 0))}[/]")
+    console.print(f"  Flash  {_usage(result.get('total_flash', 0), regions.get('flash'))}")
+    console.print(f"  RAM    {_usage(result.get('total_ram', 0), regions.get('ram'))}")
     console.print(f"  [dim]{result.get('section_count', 0)} sections, "
                   f"{result.get('symbol_count', 0)} symbols[/]")
 
@@ -175,6 +191,17 @@ def analyze(file: str, as_json: bool, project: Optional[str], top: int) -> None:
         t.add_column("Section", style="dim")
         for s in syms[:top]:
             t.add_row(s.get("name", ""), _human(s.get("size", 0)), s.get("section", ""))
+        console.print(t)
+
+    files = result.get("top_files") or []
+    if files:
+        t = Table(box=box.SIMPLE_HEAD, show_header=True, header_style="bold dim")
+        t.add_column("Source file", style="cyan")
+        t.add_column("Flash", justify="right")
+        t.add_column("RAM", justify="right")
+        for f in files[:top]:
+            t.add_row(_short_path(f.get("file", "")),
+                      _human(f.get("flash", 0)), _human(f.get("ram", 0)))
         console.print(t)
 
     for w in result.get("warnings", []):
@@ -210,8 +237,9 @@ def check(file: str, budget_flash: Optional[str], budget_ram: Optional[str], as_
     if as_json:
         click.echo(json.dumps(result, indent=2))
     else:
-        console.print(f"  Flash  {_human(result.get('total_flash', 0))}")
-        console.print(f"  RAM    {_human(result.get('total_ram', 0))}")
+        regions = load_regions(Path(file).resolve().parent)
+        console.print(f"  Flash  {_usage(result.get('total_flash', 0), regions.get('flash'))}")
+        console.print(f"  RAM    {_usage(result.get('total_ram', 0), regions.get('ram'))}")
         for v in violations:
             err.print(f"  [bold red]✗ {v.get('label', v.get('kind'))} over budget by "
                       f"{_human(v.get('overage', 0))} "
@@ -224,20 +252,37 @@ def check(file: str, budget_flash: Optional[str], budget_ram: Optional[str], as_
 
 @cli.command()
 @click.argument("old_file", type=click.Path(exists=False))
-@click.argument("new_file", type=click.Path(exists=False))
+@click.argument("new_file", type=click.Path(exists=False), required=False)
+@click.option("--project", default=None,
+              help="Diff one file against this project's baseline (or newest) saved build.")
 @click.option("--json", "as_json", is_flag=True, help="Output the diff as JSON.")
 @click.option("--format", "fmt", type=click.Choice(["terminal", "markdown"]), default="terminal",
               help="'markdown' is ready to post as a PR comment.")
 @click.option("--fail-on", "fail_on", default=None,
               help="Fail if a metric grows beyond a limit, like 'flash:+2KB,ram:512'.")
 @click.option("--top", type=int, default=15, show_default=True, help="How many symbol changes to show.")
-def diff(old_file: str, new_file: str, as_json: bool, fmt: str,
-         fail_on: Optional[str], top: int) -> None:
-    """Size change between two builds, with per-symbol deltas."""
-    base = _extract_or_die(old_file)
-    head = _extract_or_die(new_file)
+def diff(old_file: str, new_file: Optional[str], project: Optional[str],
+         as_json: bool, fmt: str, fail_on: Optional[str], top: int) -> None:
+    """Size change between two builds, with per-symbol deltas.
+
+    Pass two files, or one file with --project to diff against the build
+    saved on the server (run diff before analyze so the comparison is not
+    against the build you are about to save).
+    """
     limits = parse_fail_on(fail_on) if fail_on else {}
-    result = _call(client.diff, base, head, limits)
+    if new_file is None:
+        if not project:
+            _die("Pass two files, or one file with --project.")
+        head = _extract_or_die(old_file)
+        result = _call(client.diff_project, head, project, limits)
+        old_name = result.get("base_filename") or f"{project} (saved build)"
+        new_name = Path(old_file).name
+    else:
+        base = _extract_or_die(old_file)
+        head = _extract_or_die(new_file)
+        result = _call(client.diff, base, head, limits)
+        old_name = Path(old_file).name
+        new_name = Path(new_file).name
 
     flash_d = result.get("flash_delta", 0)
     ram_d = result.get("ram_delta", 0)
@@ -250,11 +295,11 @@ def diff(old_file: str, new_file: str, as_json: bool, fmt: str,
         sys.exit(1 if not passed else 0)
 
     if fmt == "markdown":
-        md = _render_diff_markdown(Path(old_file).name, Path(new_file).name, flash_d, ram_d, diffs, top)
+        md = _render_diff_markdown(old_name, new_name, flash_d, ram_d, diffs, top)
         click.echo(md)
         sys.exit(1 if not passed else 0)
 
-    console.rule(f"[bold]memprobe diff: {Path(old_file).name} -> {Path(new_file).name}[/]")
+    console.rule(f"[bold]memprobe diff: {old_name} -> {new_name}[/]")
     console.print()
     console.print(f"  Flash  [{'red' if flash_d > 0 else 'green'}]{_signed(flash_d)}[/]")
     console.print(f"  RAM    [{'red' if ram_d > 0 else 'green'}]{_signed(ram_d)}[/]")

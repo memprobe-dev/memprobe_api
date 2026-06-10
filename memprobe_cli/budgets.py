@@ -1,5 +1,3 @@
-"""Read budgets from a memprobe.toml and parse human size strings."""
-
 from __future__ import annotations
 
 import re
@@ -25,7 +23,7 @@ def parse_size(s) -> int:
     return int(float(m.group(1)) * _MULT[m.group(2).lower()])
 
 
-def load_budgets(start: Optional[Path] = None) -> dict:
+def _load_table(table: str, start: Optional[Path] = None) -> dict:
     path = find_config(start)
     if path is None:
         return {}
@@ -35,12 +33,20 @@ def load_budgets(start: Optional[Path] = None) -> dict:
     except (OSError, _toml.TOMLDecodeError):
         return {}
     out: dict = {}
-    for key, val in data.get("budgets", {}).items():
+    for key, val in data.get(table, {}).items():
         try:
             out[key] = parse_size(val)
         except ValueError:
             continue
     return out
+
+
+def load_budgets(start: Optional[Path] = None) -> dict:
+    return _load_table("budgets", start)
+
+
+def load_regions(start: Optional[Path] = None) -> dict:
+    return _load_table("regions", start)
 
 
 def find_config(start: Optional[Path] = None) -> Optional[Path]:

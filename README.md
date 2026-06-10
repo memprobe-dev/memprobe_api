@@ -2,10 +2,10 @@
 
 Firmware memory budgets and size-regression checks for CI, from the command line.
 
-`memprobe` reads the section and symbol table out of your ELF **locally** and
+`memprobe` reads the section and symbol table out of your ELF locally and
 sends only that metadata to the [memprobe](https://memprobe.dev) API, which
-returns the analysis. **Your binary never leaves your machine**: only the
-sizes and symbol names it contains are sent, the same information `readelf` and
+returns the analysis. Your binary never leaves your machine: only the sizes
+and symbol names it contains are sent, the same information `readelf` and
 `nm` print.
 
 ```bash
@@ -54,6 +54,17 @@ secret:
 ```bash
 pip install memprobe
 memprobe check build/firmware.elf
+```
+
+On GitHub, [memprobe-action](https://github.com/memprobe-dev/memprobe-action)
+wraps this and also posts a size report with symbol-level changes as a PR
+comment:
+
+```yaml
+- uses: memprobe-dev/memprobe-action@v1
+  with:
+    file: build/firmware.elf
+    api-key: ${{ secrets.MEMPROBE_API_KEY }}
 ```
 
 ## What runs where

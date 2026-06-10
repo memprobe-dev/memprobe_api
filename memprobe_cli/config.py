@@ -1,5 +1,3 @@
-"""Persistent CLI config: API key and server URL."""
-
 from __future__ import annotations
 
 import json
