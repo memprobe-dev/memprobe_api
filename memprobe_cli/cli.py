@@ -11,8 +11,10 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
+import subprocess
+
 from . import __version__, client, config
-from .budgets import load_budgets, load_regions, parse_size
+from .budgets import load_budgets, load_regions, load_watch, parse_ld_regions, parse_size
 from .extract import extract, ExtractError
 
 console = Console(highlight=False)
@@ -57,6 +59,32 @@ def _short_path(path: str, parts: int = 3) -> str:
     return "/".join(pieces[-parts:]) if len(pieces) > parts else path
 
 
+def _git(args: list, cwd: Path) -> Optional[str]:
+    try:
+        out = subprocess.run(["git", "-C", str(cwd), *args],
+                             capture_output=True, text=True, timeout=3)
+        return out.stdout.strip() or None if out.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _git_info(start: Path) -> dict:
+    commit = _git(["rev-parse", "--short=12", "HEAD"], start)
+    if not commit:
+        return {}
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], start)
+    if branch in (None, "HEAD"):
+        # CI checkouts are detached; the branch name only exists in env vars
+        branch = (os.environ.get("GITHUB_HEAD_REF")
+                  or os.environ.get("GITHUB_REF_NAME")
+                  or os.environ.get("CI_COMMIT_REF_NAME")
+                  or None)
+    info = {"hash": commit}
+    if branch:
+        info["branch"] = branch
+    return info
+
+
 def _usage(used: int, capacity: Optional[int]) -> str:
     if not capacity:
         return f"[bold]{_human(used)}[/]"
@@ -77,7 +105,10 @@ def parse_fail_on(spec: str) -> dict:
         metric = metric.strip().lower()
         if metric not in ("flash", "ram"):
             raise click.BadParameter(f"unknown metric '{metric}' (use 'flash' or 'ram')")
-        limits[metric] = parse_size(size.strip().lstrip("+"))
+        try:
+            limits[metric] = parse_size(size.strip().lstrip("+"))
+        except ValueError as exc:
+            raise click.BadParameter(str(exc))
     return limits
 
 
@@ -94,9 +125,14 @@ ram   = "128KB"
 # ".bss"  = "96KB"
 
 # Physical part capacity. Adds utilization percentages to analyze and check.
+# Fill automatically from a linker script: memprobe init --from-ld <script.ld>
 # [regions]
 # flash = "1MB"
 # ram   = "320KB"
+
+# Per-symbol size limits. `check` fails when a watched symbol grows past one.
+# [watch]
+# "ui_render" = "8KB"
 """
 
 
@@ -168,6 +204,9 @@ def account(as_json: bool) -> None:
 def analyze(file: str, as_json: bool, project: Optional[str], top: int) -> None:
     """Size summary for an ELF (flash/ram totals, biggest sections and symbols)."""
     meta = _extract_or_die(file)
+    git = _git_info(Path(file).resolve().parent)
+    if git:
+        meta["git"] = git
     result = _call(client.analyze, meta, project)
 
     if as_json:
@@ -222,24 +261,35 @@ def check(file: str, budget_flash: Optional[str], budget_ram: Optional[str], as_
     override them.
     """
     meta = _extract_or_die(file)
-    budgets = load_budgets(Path(file).resolve().parent)
+    start = Path(file).resolve().parent
+    budgets = load_budgets(start)
     if budget_flash:
         budgets["flash"] = parse_size(budget_flash)
     if budget_ram:
         budgets["ram"] = parse_size(budget_ram)
-    if not budgets:
+    watch = load_watch(start)
+    if not budgets and not watch:
         _die("No budgets configured. Run 'memprobe init' or pass --budget-flash / --budget-ram.")
 
-    result = _call(client.check, meta, budgets)
+    if budgets:
+        result = _call(client.check, meta, budgets)
+    else:
+        result = {"passed": True, "violations": [],
+                  "total_flash": None, "total_ram": None}
     violations = result.get("violations", [])
-    passed = result.get("passed", not violations)
+    violations += _check_watch(meta, watch)
+    result["violations"] = violations
+    passed = result.get("passed", not violations) and not any(
+        v.get("kind") == "symbol" for v in violations)
+    result["passed"] = passed
 
     if as_json:
         click.echo(json.dumps(result, indent=2))
     else:
-        regions = load_regions(Path(file).resolve().parent)
-        console.print(f"  Flash  {_usage(result.get('total_flash', 0), regions.get('flash'))}")
-        console.print(f"  RAM    {_usage(result.get('total_ram', 0), regions.get('ram'))}")
+        regions = load_regions(start)
+        if result.get("total_flash") is not None:
+            console.print(f"  Flash  {_usage(result.get('total_flash', 0), regions.get('flash'))}")
+            console.print(f"  RAM    {_usage(result.get('total_ram', 0), regions.get('ram'))}")
         for v in violations:
             err.print(f"  [bold red]✗ {v.get('label', v.get('kind'))} over budget by "
                       f"{_human(v.get('overage', 0))} "
@@ -248,6 +298,26 @@ def check(file: str, budget_flash: Optional[str], budget_ram: Optional[str], as_
             console.print("  [green]✓ All budgets OK[/]")
 
     sys.exit(1 if not passed else 0)
+
+
+def _check_watch(meta: dict, watch: dict) -> list:
+    if not watch:
+        return []
+    sizes: dict = {}
+    for s in meta.get("symbols") or []:
+        name = s.get("name")
+        if name in watch:
+            sizes[name] = sizes.get(name, 0) + int(s.get("size") or 0)
+    violations = []
+    for name, limit in watch.items():
+        actual = sizes.get(name)
+        if actual is None:
+            err.print(f"  [dim]watched symbol '{name}' not found in this build[/]")
+            continue
+        if actual > limit:
+            violations.append({"kind": "symbol", "label": name, "budget": limit,
+                               "actual": actual, "overage": actual - limit})
+    return violations
 
 
 @cli.command()
@@ -270,6 +340,8 @@ def diff(old_file: str, new_file: Optional[str], project: Optional[str],
     against the build you are about to save).
     """
     limits = parse_fail_on(fail_on) if fail_on else {}
+    if new_file is not None and project:
+        _die("Pass either two files or one file with --project, not both.")
     if new_file is None:
         if not project:
             _die("Pass two files, or one file with --project.")
@@ -287,6 +359,7 @@ def diff(old_file: str, new_file: Optional[str], project: Optional[str],
     flash_d = result.get("flash_delta", 0)
     ram_d = result.get("ram_delta", 0)
     diffs = result.get("symbol_diffs", [])
+    file_diffs = result.get("file_diffs", [])
     regressions = result.get("regressions", [])
     passed = result.get("passed", not regressions)
 
@@ -295,7 +368,7 @@ def diff(old_file: str, new_file: Optional[str], project: Optional[str],
         sys.exit(1 if not passed else 0)
 
     if fmt == "markdown":
-        md = _render_diff_markdown(old_name, new_name, flash_d, ram_d, diffs, top)
+        md = _render_diff_markdown(old_name, new_name, flash_d, ram_d, diffs, file_diffs, top)
         click.echo(md)
         sys.exit(1 if not passed else 0)
 
@@ -303,6 +376,18 @@ def diff(old_file: str, new_file: Optional[str], project: Optional[str],
     console.print()
     console.print(f"  Flash  [{'red' if flash_d > 0 else 'green'}]{_signed(flash_d)}[/]")
     console.print(f"  RAM    [{'red' if ram_d > 0 else 'green'}]{_signed(ram_d)}[/]")
+    if file_diffs:
+        console.print()
+        t = Table(box=box.SIMPLE_HEAD, show_header=True, header_style="bold dim")
+        t.add_column("Source file", style="cyan")
+        t.add_column("Change", justify="right")
+        t.add_column("Symbols", justify="right", style="dim")
+        for f in file_diffs[:top]:
+            d = f.get("delta", 0)
+            t.add_row(_short_path(f.get("file", "")),
+                      f"[{'red' if d > 0 else 'green'}]{_signed(d)}[/]",
+                      str(f.get("symbols", 0)))
+        console.print(t)
     if diffs:
         console.print()
         t = Table(box=box.SIMPLE_HEAD, show_header=True, header_style="bold dim")
@@ -326,8 +411,26 @@ def diff(old_file: str, new_file: Optional[str], project: Optional[str],
 
 @cli.command()
 @click.option("--force", is_flag=True, help="Overwrite existing files.")
-def init(force: bool) -> None:
+@click.option("--from-ld", "ld_script", type=click.Path(exists=True), default=None,
+              help="Fill [regions] from the MEMORY block of a GNU linker script.")
+def init(force: bool, ld_script: Optional[str]) -> None:
     """Scaffold a memprobe.toml with flash/RAM budgets."""
+    content = _MEMPROBE_TOML
+    if ld_script:
+        regions = parse_ld_regions(Path(ld_script))
+        if not regions:
+            _die(f"No usable MEMORY regions found in {ld_script}. "
+                 f"Add [regions] to memprobe.toml by hand.")
+        block = f"# From {Path(ld_script).name}:\n[regions]\n" + "".join(
+            f"{k} = {v}  # {_human(v)}\n" for k, v in sorted(regions.items()))
+        commented = '# [regions]\n# flash = "1MB"\n# ram   = "320KB"\n'
+        if commented in content:
+            content = content.replace(commented, block)
+        else:
+            content += "\n" + block
+        for k, v in sorted(regions.items()):
+            console.print(f"  {k}: [bold]{_human(v)}[/]  [dim](from {Path(ld_script).name})[/]")
+
     def _write(target: Path, content: str) -> None:
         if target.exists() and not force:
             err.print(f"  [yellow]{target} already exists[/] (use --force to overwrite).")
@@ -336,14 +439,14 @@ def init(force: bool) -> None:
         target.write_text(content, encoding="utf-8")
         console.print(f"  [green]✓[/] wrote {target}")
 
-    _write(Path("memprobe.toml"), _MEMPROBE_TOML)
+    _write(Path("memprobe.toml"), content)
     console.print()
     console.print("  Next: set your key with [cyan]memprobe config set --key <key>[/], "
                   "then [cyan]memprobe check <firmware.elf>[/].")
 
 
 def _render_diff_markdown(old_name: str, new_name: str, flash_d: int, ram_d: int,
-                          diffs: list, top: int) -> str:
+                          diffs: list, file_diffs: list, top: int) -> str:
     def sign(n):
         return f"+{n:,}" if n >= 0 else f"{n:,}"
     lines = [
@@ -356,6 +459,10 @@ def _render_diff_markdown(old_name: str, new_name: str, flash_d: int, ram_d: int
         f"| Flash | {sign(flash_d)} B |",
         f"| RAM | {sign(ram_d)} B |",
     ]
+    if file_diffs:
+        lines += ["", "| Source file | Change |", "|---|---:|"]
+        for f in file_diffs[:top]:
+            lines.append(f"| `{_short_path(f.get('file', ''))}` | {sign(f.get('delta', 0))} B |")
     changed = [s for s in diffs if s.get("delta")]
     if changed:
         lines += ["", "<details><summary>Top symbol changes</summary>", "",

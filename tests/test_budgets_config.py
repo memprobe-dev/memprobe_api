@@ -59,3 +59,52 @@ def test_env_overrides_config(tmp_path, monkeypatch):
     config.set_values(api_key="stored_key")
     monkeypatch.setenv("MEMPROBE_API_KEY", "env_key")
     assert config.get_api_key() == "env_key"
+
+
+LD_SCRIPT = """
+/* STM32H7 memory layout */
+MEMORY
+{
+  FLASH (rx)   : ORIGIN = 0x08000000, LENGTH = 1024K
+  FLASH2 (rx)  : ORIGIN = 0x08100000, LENGTH = 0x80000
+  RAM_D1 (xrw) : ORIGIN = 0x24000000, LENGTH = 512K
+  ITCMRAM (xrw): ORIGIN = 0x00000000, LENGTH = 65536
+  WEIRD (r)    : ORIGIN = 0x0, LENGTH = SIZEOF(.text)
+}
+SECTIONS { }
+"""
+
+
+def test_parse_ld_regions(tmp_path):
+    from memprobe_cli.budgets import parse_ld_regions
+    p = tmp_path / "app.ld"
+    p.write_text(LD_SCRIPT)
+    r = parse_ld_regions(p)
+    assert r["flash"] == 1024 * 1024 + 0x80000
+    assert r["ram"] == 512 * 1024 + 65536
+
+
+def test_parse_ld_regions_without_memory_block(tmp_path):
+    from memprobe_cli.budgets import parse_ld_regions
+    p = tmp_path / "bare.ld"
+    p.write_text("SECTIONS { .text : { *(.text) } }")
+    assert parse_ld_regions(p) == {}
+
+
+def test_load_watch(tmp_path, monkeypatch):
+    from memprobe_cli.budgets import load_watch
+    (tmp_path / "memprobe.toml").write_text('[watch]\n"ui_render" = "8KB"\n')
+    assert load_watch(tmp_path) == {"ui_render": 8192}
+
+
+def test_parse_ld_regions_org_len_spelling(tmp_path):
+    from memprobe_cli.budgets import parse_ld_regions
+    p = tmp_path / "vendor.ld"
+    p.write_text(
+        "MEMORY\n{\n"
+        "  flash (rx) : org = 0x00000000, len = 256K\n"
+        "  sram (rwx) : o = 0x20000000, l = 0x10000\n"
+        "}\n")
+    r = parse_ld_regions(p)
+    assert r["flash"] == 256 * 1024
+    assert r["ram"] == 0x10000

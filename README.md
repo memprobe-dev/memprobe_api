@@ -35,9 +35,10 @@ pip install memprobe
 | Command | What it does |
 |---|---|
 | `memprobe analyze <elf>` | Size summary: flash/ram totals, biggest sections and symbols. |
-| `memprobe check <elf>` | Fail (exit 1) if a budget in `memprobe.toml` is exceeded. The CI gate. |
-| `memprobe diff <old> <new>` | Size change between two builds, with per-symbol deltas. `--format markdown` for PR comments. |
-| `memprobe init` | Scaffold `memprobe.toml` with flash/ram budgets. |
+| `memprobe check <elf>` | Fail (exit 1) if a budget or watched symbol limit in `memprobe.toml` is exceeded. The CI gate. |
+| `memprobe diff <old> <new>` | Size change between two builds, with per-file and per-symbol deltas. `--format markdown` for PR comments. |
+| `memprobe diff <elf> --project <name>` | Diff against the project's saved baseline build, no second file needed. |
+| `memprobe init` | Scaffold `memprobe.toml` with flash/ram budgets. `--from-ld <script.ld>` fills part capacity from the linker script. |
 | `memprobe account` | Show your plan and this month's usage. |
 | `memprobe config set --key <key> [--server <url>]` | Store your API key (in `~/.memprobe/config.json`). |
 | `memprobe config show` | Show the current key (masked) and server. |

@@ -128,6 +128,19 @@ def test_diff_one_file_without_project_errors():
     assert "--project" in r.output
 
 
+def test_diff_bad_fail_on_is_a_clean_error():
+    r = _run("diff", str(ELF), str(ELF), "--fail-on", "flash:abc")
+    assert r.exit_code == 2
+    assert "Invalid size" in r.output
+    assert "Traceback" not in r.output
+
+
+def test_diff_two_files_and_project_conflict():
+    r = _run("diff", str(ELF), str(ELF), "--project", "demo")
+    assert r.exit_code == 1
+    assert "not both" in r.output
+
+
 def test_diff_fail_on(monkeypatch):
     monkeypatch.setattr(cli_mod.client, "diff",
                         lambda base, head, fail_on=None: {
@@ -161,3 +174,60 @@ def test_missing_key_is_a_clean_error(monkeypatch):
     r = _run("analyze", str(ELF))
     assert r.exit_code == 1
     assert "API key" in r.output
+
+
+def test_init_from_ld(tmp_path):
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path("app.ld").write_text(
+            "MEMORY {\n"
+            "  FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 1024K\n"
+            "  RAM (xrw)  : ORIGIN = 0x20000000, LENGTH = 128K\n"
+            "}\n")
+        r = runner.invoke(cli, ["init", "--from-ld", "app.ld"])
+        assert r.exit_code == 0, r.output
+        toml = Path("memprobe.toml").read_text()
+        assert "[regions]" in toml
+        assert "flash = 1048576" in toml
+        assert "ram = 131072" in toml
+
+
+def test_check_watch_violation(tmp_path, monkeypatch):
+    import shutil
+    from memprobe_cli.extract import extract
+    sym = next(s for s in extract(ELF)["symbols"] if s["size"] > 1)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        shutil.copy(ELF, "fw.elf")
+        Path("memprobe.toml").write_text(f'[watch]\n"{sym["name"]}" = 1\n')
+        r = runner.invoke(cli, ["check", "fw.elf", "--json"])
+        assert r.exit_code == 1
+        data = json.loads(r.output)
+        assert data["passed"] is False
+        assert any(v["kind"] == "symbol" and v["label"] == sym["name"]
+                   for v in data["violations"])
+
+
+def test_diff_markdown_file_table(monkeypatch):
+    monkeypatch.setattr(cli_mod.client, "diff",
+                        lambda base, head, fail_on=None: {
+                            "flash_delta": 1200, "ram_delta": 0,
+                            "symbol_diffs": [{"name": "foo", "old_size": 100, "new_size": 1300, "delta": 1200}],
+                            "file_diffs": [{"file": "app/src/ui/render.c", "delta": 1200, "symbols": 1}],
+                            "passed": True, "regressions": []})
+    r = _run("diff", str(ELF), str(ELF), "--format", "markdown")
+    assert r.exit_code == 0, r.output
+    assert "| Source file | Change |" in r.output
+    assert "`src/ui/render.c`" in r.output
+
+
+def test_init_from_ld_appends_when_template_drifts(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli_mod, "_MEMPROBE_TOML", '[budgets]\nflash = "512KB"\n')
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path("app.ld").write_text(
+            "MEMORY { FLASH (rx) : ORIGIN = 0, LENGTH = 64K }\n")
+        r = runner.invoke(cli, ["init", "--from-ld", "app.ld"])
+        assert r.exit_code == 0, r.output
+        toml = Path("memprobe.toml").read_text()
+        assert "[regions]" in toml and "flash = 65536" in toml
