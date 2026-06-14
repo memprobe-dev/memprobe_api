@@ -108,3 +108,17 @@ def test_parse_ld_regions_org_len_spelling(tmp_path):
     r = parse_ld_regions(p)
     assert r["flash"] == 256 * 1024
     assert r["ram"] == 0x10000
+
+
+def test_parse_ld_regions_excludes_eeprom_and_backup(tmp_path):
+    from memprobe_cli.budgets import parse_ld_regions
+    p = tmp_path / "stm32.ld"
+    p.write_text(
+        "MEMORY {\n"
+        "  FLASH (rx)   : ORIGIN = 0x08000000, LENGTH = 512K\n"
+        "  RAM (rw)     : ORIGIN = 0x20000000, LENGTH = 128K\n"
+        "  EEPROM (rw)  : ORIGIN = 0x08080000, LENGTH = 4K\n"
+        "  BKPSRAM (rw) : ORIGIN = 0x40024000, LENGTH = 4K\n"
+        "}\n")
+    r = parse_ld_regions(p)
+    assert r == {"flash": 512 * 1024, "ram": 128 * 1024}

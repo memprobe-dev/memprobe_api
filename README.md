@@ -1,12 +1,17 @@
-# memprobe
+<p align="center">
+  <img src="https://memprobe.dev/static/logo-256.png" alt="memprobe" width="84">
+</p>
+<h1 align="center">memprobe</h1>
+<p align="center">Firmware memory budgets and size-regression checks for CI, from the command line.</p>
 
-Firmware memory budgets and size-regression checks for CI, from the command line.
+<p align="center">
+  <img src="https://memprobe.dev/static/demo-memprobe.gif" alt="memprobe demo" width="760">
+</p>
 
 `memprobe` reads the section and symbol table out of your ELF locally and
 sends only that metadata to the [memprobe](https://memprobe.dev) API, which
-returns the analysis. Your binary never leaves your machine: only the sizes
-and symbol names it contains are sent, the same information `readelf` and
-`nm` print.
+returns the analysis. Only the sizes and symbol names are sent, the same
+information `readelf` and `nm` print.
 
 ```bash
 pip install memprobe

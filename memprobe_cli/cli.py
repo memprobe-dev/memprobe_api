@@ -139,7 +139,7 @@ ram   = "128KB"
 @click.group()
 @click.version_option(__version__, prog_name="memprobe")
 def cli() -> None:
-    """Firmware memory budgets and size checks. Your binary stays local."""
+    """Firmware memory budgets and size checks."""
 
 
 @cli.group(name="config")

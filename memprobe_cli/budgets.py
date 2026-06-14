@@ -60,6 +60,9 @@ _LD_REGION_RE = re.compile(
     re.MULTILINE | re.IGNORECASE)
 _FLASH_NAMES = ("FLASH", "ROM", "AXIROM", "QSPI", "OSPI")
 _RAM_NAMES = ("RAM", "SRAM", "DTCM", "ITCM", "CCM", "TCM", "HEAP", "DRAM", "IRAM")
+# Non-program memories that match a flash/ram keyword by substring but are not
+# the part's code flash or main RAM: EEPROM contains "ROM", backup SRAM is tiny.
+_SKIP_REGION_NAMES = ("EEPROM", "E2PROM", "E2P", "OTP", "BACKUP", "BKPSRAM", "BKP")
 
 
 def _ld_length(value: str) -> Optional[int]:
@@ -89,6 +92,8 @@ def parse_ld_regions(path: Path) -> dict:
         if size is None:
             continue
         upper = name.upper()
+        if any(k in upper for k in _SKIP_REGION_NAMES):
+            continue
         if any(k in upper for k in _FLASH_NAMES):
             out["flash"] += size
         elif any(k in upper for k in _RAM_NAMES):
