@@ -1,17 +1,16 @@
 <p align="center">
-  <img src="https://memprobe.dev/static/logo-256.png" alt="memprobe" width="84">
+  <img src="https://raw.githubusercontent.com/memprobe-dev/memprobe_api/master/logo.png" alt="memprobe" width="84">
 </p>
 <h1 align="center">memprobe</h1>
 <p align="center">Firmware memory budgets and size-regression checks for CI, from the command line.</p>
 
 <p align="center">
-  <img src="https://memprobe.dev/static/demo-memprobe.gif" alt="memprobe demo" width="760">
+  <img src="https://raw.githubusercontent.com/memprobe-dev/memprobe_api/master/demo.gif" alt="memprobe demo" width="760">
 </p>
 
-`memprobe` reads the section and symbol table out of your ELF locally and
-sends only that metadata to the [memprobe](https://memprobe.dev) API, which
-returns the analysis. Only the sizes and symbol names are sent, the same
-information `readelf` and `nm` print.
+`memprobe` reads the section and symbol table from your ELF and sends only that
+metadata to the [memprobe](https://memprobe.dev) API. It sends the same sizes
+and symbol names `readelf` and `nm` print, nothing else.
 
 ```bash
 pip install memprobe
@@ -19,7 +18,7 @@ pip install memprobe
 
 ## Quick start
 
-1. Create an API key at <https://memprobe.dev> (Account → API keys).
+1. Create an API key at <https://memprobe.dev> (Account, then API keys).
 2. Point the CLI at it:
 
    ```bash
@@ -48,8 +47,7 @@ pip install memprobe
 | `memprobe config set --key <key> [--server <url>]` | Store your API key (in `~/.memprobe/config.json`). |
 | `memprobe config show` | Show the current key (masked) and server. |
 
-`MEMPROBE_API_KEY` and `MEMPROBE_SERVER` environment variables override the
-stored config, which is convenient in CI.
+`MEMPROBE_API_KEY` and `MEMPROBE_SERVER` override the stored config, for use in CI.
 
 ## CI
 
@@ -81,9 +79,9 @@ comment:
 | Extracts sections/symbols | yes (via pyelftools) | no |
 | Budget / diff / bloat analysis | no | yes |
 
-This package contains no analysis logic and no proprietary code: it's a thin,
-open-source client. The deeper analysis (call graph, dead-code, stack usage,
-source attribution) lives in the web app at <https://memprobe.dev>.
+This is a thin open-source client with no analysis logic of its own. The deeper
+analysis (call graph, dead code, stack usage, source attribution) runs in the
+web app at <https://memprobe.dev>.
 
 ## License
 
