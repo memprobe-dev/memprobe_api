@@ -111,8 +111,6 @@ def extract(path: Union[str, Path]) -> dict:
 
 
 def _unify_file_names(symbols: list) -> None:
-    # STT_FILE gives bare basenames, DWARF gives full paths. When a basename
-    # matches exactly one known path, use the path so the file isn't counted twice.
     full_paths: dict[str, Union[str, None]] = {}
     for s in symbols:
         f = s.get("file")
@@ -171,8 +169,6 @@ def _extract_open(fh, filename: str) -> dict:
     symtab = elf.get_section_by_name(".symtab")
     if isinstance(symtab, SymbolTableSection):
         resolver = _SourceResolver(elf)
-        # an STT_FILE entry names the object file for the locals that follow
-        # it; globals sit after all locals, so the marker only covers locals
         current_file = None
         for sym in symtab.iter_symbols():
             info = sym["st_info"]

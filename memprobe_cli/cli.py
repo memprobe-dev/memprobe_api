@@ -56,16 +56,18 @@ def _signed(n: int) -> str:
 
 def _short_path(path: str, parts: int = 3) -> str:
     pieces = path.replace("\\", "/").split("/")
-    return "/".join(pieces[-parts:]) if len(pieces) > parts else path
+    return "/".join(pieces[-parts:])
 
 
 def _git(args: list, cwd: Path) -> Optional[str]:
     try:
         out = subprocess.run(["git", "-C", str(cwd), *args],
                              capture_output=True, text=True, timeout=3)
-        return out.stdout.strip() or None if out.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
 
 
 def _git_info(start: Path) -> dict:
@@ -74,7 +76,6 @@ def _git_info(start: Path) -> dict:
         return {}
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], start)
     if branch in (None, "HEAD"):
-        # CI checkouts are detached; the branch name only exists in env vars
         branch = (os.environ.get("GITHUB_HEAD_REF")
                   or os.environ.get("GITHUB_REF_NAME")
                   or os.environ.get("CI_COMMIT_REF_NAME")
@@ -276,11 +277,12 @@ def check(file: str, budget_flash: Optional[str], budget_ram: Optional[str], as_
     else:
         result = {"passed": True, "violations": [],
                   "total_flash": None, "total_ram": None}
-    violations = result.get("violations", [])
-    violations += _check_watch(meta, watch)
+
+    budgets_ok = result.get("passed", True)
+    watch_violations = _check_watch(meta, watch)
+    violations = result.get("violations", []) + watch_violations
+    passed = budgets_ok and not watch_violations
     result["violations"] = violations
-    passed = result.get("passed", not violations) and not any(
-        v.get("kind") == "symbol" for v in violations)
     result["passed"] = passed
 
     if as_json:
@@ -447,8 +449,6 @@ def init(force: bool, ld_script: Optional[str]) -> None:
 
 def _render_diff_markdown(old_name: str, new_name: str, flash_d: int, ram_d: int,
                           diffs: list, file_diffs: list, top: int) -> str:
-    def sign(n):
-        return f"+{n:,}" if n >= 0 else f"{n:,}"
     lines = [
         "### memprobe firmware size report",
         "",
@@ -456,20 +456,20 @@ def _render_diff_markdown(old_name: str, new_name: str, flash_d: int, ram_d: int
         "",
         "| Metric | Change |",
         "|---|---:|",
-        f"| Flash | {sign(flash_d)} B |",
-        f"| RAM | {sign(ram_d)} B |",
+        f"| Flash | {_signed(flash_d)} |",
+        f"| RAM | {_signed(ram_d)} |",
     ]
     if file_diffs:
         lines += ["", "| Source file | Change |", "|---|---:|"]
         for f in file_diffs[:top]:
-            lines.append(f"| `{_short_path(f.get('file', ''))}` | {sign(f.get('delta', 0))} B |")
+            lines.append(f"| `{_short_path(f.get('file', ''))}` | {_signed(f.get('delta', 0))} |")
     changed = [s for s in diffs if s.get("delta")]
     if changed:
         lines += ["", "<details><summary>Top symbol changes</summary>", "",
                   "| Symbol | Old | New | Change |", "|---|---:|---:|---:|"]
         for s in changed[:top]:
             lines.append(f"| `{s.get('name','')}` | {s.get('old_size',0):,} | "
-                         f"{s.get('new_size',0):,} | {sign(s.get('delta',0))} |")
+                         f"{s.get('new_size',0):,} | {_signed(s.get('delta',0))} |")
         lines.append("</details>")
     return "\n".join(lines)
 
